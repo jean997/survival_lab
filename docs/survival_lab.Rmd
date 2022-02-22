@@ -91,24 +91,17 @@ ggsurvplot(fit1,
 ---
 # KM Curves by Strata
 
-.panelset[
-.panel[.panel-name[R Code]
-```{r kmsex, fig.show='hide', fig.align='center', fig.height=6, fig.width=12}
+
+```{r kmsex, fig.align='center', fig.height=6, fig.width=12}
 fit2 <- survfit(Surv(time, status) ~ sex, data=lung)
 names(fit2$strata) <- c("Male", "Female")
 ggsurvplot(fit2, 
            risk.table = TRUE, 
            conf.int = TRUE,
            ggtheme = theme_bw(base_size = 16), 
-           legend = "right", 
-           tables.height = 0.3)
+           legend = "right", tables.height = 0.3)
 ```
 
-]
-.panel[.panel-name[Plot]
-![](`r knitr::fig_chunk("kmsex", ".png")`)
-]
-]
 
 ---
 # Median Survival
@@ -136,13 +129,12 @@ ggsurvplot(fit2,
            risk.table = TRUE, 
            conf.int = TRUE,
            surv.median.line = "hv",
-           ggtheme = theme_bw(base_size = 16), 
+           ggtheme = theme_bw(base_size = 25), 
            legend = "right", 
            tables.height = 0.3)
 ```
 
 - Median survival is 156 days longer in females than in males. 
-  + Note that this is an *associational* description. 
   
 ---
 # Testing for Differences
@@ -169,22 +161,19 @@ summary(coxfit1)
 - We estimate that the hazard in females is 0.61 times the hazard in males, adjusting for sex, ECOG score, and Karnofsky score (95% CI: 0.44-0.85). 
 
 ---
-# Displaying Survival Curves
+# Estimating Survival Curves
 
-- In some cases, it might be useful to display survival curves estimated from the fitted model. 
+- Displaying survival curves estimated from the fitted model can help with interpretation. 
 
-- Since we have many covariates, we need to choose some covariate values for our curves. 
+- We need to choose some covariate values for our curves. 
   - The median age in the data is 63. 
   - The 75th percentile of Karnofsky score is 90 (relatively healthy patients).
   - The 25th percentile of Karnofsky score 70 (less healthy patients).
   
-- We will plot survival curves for male and female patients of median age and
-  + Have a Karnofsky score of 90 or
-  + Have a Karnofsky score of 70
-  + (So four curves)
+- We will plot survival curves for male and female patients of median age with Karnofsky scores of 90 and 70 (so four curves).
 
 ---
-# Displaying Survival Curves
+# Estimating Survival Curves
 
 .panelset[
 .panel[.panel-name[R Code]
@@ -238,6 +227,8 @@ zp
 ```
 ```{r zplot, fig.show='hide', fig.align='center', fig.height=6, fig.width=10}
 plot(zp[3])
+# Add the coefficient estimate from the model
+abline(h = coxfit1$coefficients[3], col="red", lwd = 2, lty = 2)
 ```
 
 ]
@@ -249,38 +240,45 @@ plot(zp[3])
 ---
 # Accounting for Non-Proportional Hazards
 
-- There are three strategies for accommodating non-proportional hazards within Cox regression:
+Three strategies for accommodating non-proportional hazards within Cox regression:
 
-1. Convert a time-fixed covariate into a time-varying covariate. 
+1. Convert a time-fixed covariate into one or more time-varying covariates. 
 
-2. Stratify the model on a single discrete covariate. 
+2. Stratify the model on a discrete covariate. 
 
 3. Artificially truncate time after a certain point.
+
+I will talk about 1 and 2. 
 
 ---
 # Stratified Cox Regression
 
 - In a stratified Cox regression, we let subgroups of the data have different baseline hazards. 
 
-- Suppose $V$ is a categorical variable with $K$ levels. We want to fit
+- Suppose $V$ is a categorical variable with $K$ levels. We want to fit the model
 
 $$\lambda(t; X, V, \beta) = \lambda_{0, V}(t)exp(X^\top \beta)$$
-- So we will estimate $K$ different (non-parametric) baseline hazard functions. 
+- We will estimate $K$ different (non-parametric) baseline hazard functions. 
 
 ---
 # Stratified Cox Regression 
 
 - Our problematic covariate is Karnofsky score which has 6 levels. 
+  + Stratification is more commonly used for categorical variables like sex or diagnosis but we will go ahead with this example. 
+```{r}
+table(lung$ph.karno)
+```
 
 - To stratify on a covariate we wrap it in `strat()` inside the formula. 
 
 ```{r}
-table(lung$ph.karno)
 coxfit2 <- coxph(Surv(time, status) ~ sex + age + 
                    + strata(ph.karno), data = lung)
 summary(coxfit2)$coefficients
 summary(coxfit1)$coefficients
 ```
+
+
 
 - Coefficient estimates for age and sex are very similar, we have lost a small amount of precision. 
 
@@ -332,7 +330,7 @@ grid.arrange(p1$plot + ggtitle("Non-Stratified") +
 $$\lambda(t; X, \beta) = \lambda_0(t) \exp(\beta(t)X)$$
 - We can't fit this model directly in the Cox regression framework, but we can achieve an equivalent model by creating one or more time-varying *covariates* based on $X$. 
 
-$$\lambda(t; \tilde{X}, \beta) = \lambda_0(t) \exp(\beta\tilde{X}(t))$$
+$$\lambda(t; \tilde{X}, \theta) = \lambda_0(t) \exp(\theta^\top\tilde{X}(t))$$
 
 ---
 # Time-Varying Covariates
@@ -344,22 +342,32 @@ $$\beta(t) = \beta_0 + \beta_1 I(t > T)\\\
 
 - So we could define a new covariate $\tilde{X}(t) = I(t > T)X$ and then fit our model adjusting for both $X$ and $\tilde{X}(t)$
 
+
+- <a href = "https://cran.r-project.org/web/packages/survival/vignettes/timedep.pdf">This is a great resource by Terry Therneau, Cynthia Cowson, and Elizabeth Atkinson.</a>
 ---
 # Time-Varying Covariates
 
-- We can try to use th plot from `cox.zph` to guess a good transformation. 
+- We could try to fit $\beta(t)$ as a step function
+
+- Or we could try to find a continuous transformation of time under which the $\beta(t)$ is about linear. 
+
 
 - To help us, the `cox.zph` function has an argument `transform`. 
 
   + `transform` lets us specify a transformation of the x-axis. 
   + We can look for a transformation that gives a more linear looking estimate of $\beta(t)$
   
-+ In our case, I will try a piecewise constant function with two knots, one at 200, and one at 450 days
 
 ```{r zplot2, fig.align='center', fig.height=6, fig.width=10}
-plot(zp[3])
+zplog <- cox.zph(coxfit1, transform = function(time) log(time + 20))
+plot(zplog[3], xlab = "log(time + 20)")
+abline(h = coxfit1$coefficients[3], col="red", lwd = 2, lty = 2)
 ```
 
++ This transformation doesn't really look like it gives us a linear hazard over time. 
+  + If it did, we could need to create a time varying covariate $\tilde{X}(t) = X log(t + 20)$ and add it to the regression.
+
++ For our example, we will use the step-function approach and fit a piecewise constant function with knots at 200 and 450 days. 
 
 ---
 # Time-Varying Covariates
@@ -395,7 +403,8 @@ coxfit3 <- coxph(Surv(time, status) ~ sex + age +  ph.karno + tt(ph.karno),
 ---
 # Time-Varying Covariates
 
-- To fit a piece-wise model with three breaks, we need to add two time-varying covariates. 
+- To fit a piece-wise model with two breaks, we need to add two time-varying covariates:
+  + $X I(t > 200)$ and $X I(t > 450)$
 
 - To do this, we let the the function given to `tt` return multiple columns. 
 
@@ -412,13 +421,18 @@ summary(coxfit4)$coefficients
 
 - We can try plotting our time-varying estimates on top of the plot from `cox.zph` to see if we are doing better. 
 
+- By defualt, `cox.zph` transforms time using the "km" transformation, so we need to 
+put our fitted values on this scale. 
+  + Or refit using the "identity" transform.
+
 ```{r zplot3, fig.align='center', fig.height=6, fig.width=10}
-zp <- cox.zph(coxfit1, transform = "identity")
 plot(zp[3])
+t1 <- zp$x[zp$time == 199]
+t2 <- zp$x[zp$time ==450]
 b <- function(t){coxfit4$coefficients[3] + 
-                 coxfit4$coefficients[4]*(t > 200) + 
-                 coxfit4$coefficients[5]*(t > 450)}
-curve(b(x), add = TRUE, col = "blue")
+                 coxfit4$coefficients[4]*(t > t1) + 
+                 coxfit4$coefficients[5]*(t > t2)}
+curve(b(x), add = TRUE, col = "blue", lwd = 2, lty = 2)
 ```
 
 ---
@@ -452,8 +466,7 @@ lr1 <- 2*(coxfit4$loglik - coxfit1$loglik)[2]
 c(lr1, pchisq(lr1, df = 2, lower.tail = FALSE))
 ```
 
-- Seems like the time-varying model is doing better. 
-
+- Seems like the time-varying model is fitting better.
 
 
 ```{r xaringan-tile-view, echo=FALSE}
