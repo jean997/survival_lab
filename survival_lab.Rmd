@@ -1,0 +1,463 @@
+---
+title: "Survival Analysis in R"
+author: "Jean Morrison"
+date: "February 22, 2022 (updated: `r Sys.Date()`)"
+output:
+  xaringan::moon_reader:
+    lib_dir: libs
+    css: [robot-fonts, robot, "scroll.css"]
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      scroll: false
+---
+# Packages We Will Use
+
+- `survival`: Does most of the heavy lifting
+
+- `survminer`: Contains `ggsurvfit` which makes nice plots. 
+
+- `dplyr`: Data management
+
+- `ggplot2`: Other plotting options
+
+```{r, warning=FALSE, message = FALSE}
+library(survival)
+library(survminer)
+library(dplyr)
+library(ggplot2)
+```
+
+---
+# Example Data
+
+- We will use the `lung` data which is built into the `survival` package. 
+
+- Data on 228 patients with advanced lung cancer. 
+  - `status`: censoring status, 1 = censored, 2 = died
+  - `time`: time baseline to censoring or death in days 
+  - `age` (years), `sex` (1 = male, 2 = female)
+  - `ph.ecog`: 4 level ECOG performance score, 0 = best, 3 = worst (bedbound)
+  - `ph.karno`: Karnofsky performance rated by physician, 0 to 100, 0 worst, 100 best 
+  - `pat.karno`: Karnofsky performance as rated by the patient
+  - `meal.cal`: Calories consumed in meals
+  - `wt.loss`: Pounds lost in last six months
+  
+---
+# Example Data  
+```{r}
+head(lung)
+lung %>% group_by(status) %>%
+    summarize(n = n(), mean = mean(time), median = median(time), 
+              q1 = quantile(time, 0.25), q3 = quantile(time, 0.75))
+```
+
+- Average follow-up time is longer in patients who were censored than patients who died. 
+  - This is expected, and will essentially always be true in time-to-event data.
+
+---
+# Kaplan-Meier Curves
+
+.panelset[
+.panel[.panel-name[R Code]
+```{r bplot, fig.show='hide', fig.align='center', fig.height=6, fig.width=10}
+fit1 <- survfit(Surv(time, status) ~ 1, data=lung)
+# Basic Plot
+plot(fit1, mark.time=TRUE)
+```
+
+```{r pplot, fig.show='hide', fig.align='center', fig.height=6, fig.width=10}
+# Pretty Plot
+ggsurvplot(fit1, 
+           risk.table = TRUE, 
+           ggtheme = theme_bw(base_size = 16), 
+           legend = "none")
+```
+
+- `Surv` creates a survival object from a vector of censoring times and a vector of event types. 
+  + Default is right censoring, but options for left, interval, and a few others are available.
+  
+- `survfit` in this usage estimates the Kaplan-Meier estimate. 
+]
+.panel[.panel-name[Basic Plot]
+![](`r knitr::fig_chunk("bplot", ".png")`)
+]
+.panel[.panel-name[Pretty Plot]
+![](`r knitr::fig_chunk("pplot", ".png")`)
+]
+]
+
+---
+# KM Curves by Strata
+
+.panelset[
+.panel[.panel-name[R Code]
+```{r kmsex, fig.show='hide', fig.align='center', fig.height=6, fig.width=12}
+fit2 <- survfit(Surv(time, status) ~ sex, data=lung)
+names(fit2$strata) <- c("Male", "Female")
+ggsurvplot(fit2, 
+           risk.table = TRUE, 
+           conf.int = TRUE,
+           ggtheme = theme_bw(base_size = 16), 
+           legend = "right", 
+           tables.height = 0.3)
+```
+
+]
+.panel[.panel-name[Plot]
+![](`r knitr::fig_chunk("kmsex", ".png")`)
+]
+]
+
+---
+# Median Survival
+
+- Median survival is the time $t^*$ at which $S(t^*) = 0.5$
+- The `survfit` object will print the median by default, get other quantiles with `quantile`.
+
+```{r}
+fit1
+quantile(fit1, probs = c(0.1, 0.25)) %>% data.frame()
+```
+
+- The naive approach gives the wrong answer
+```{r}
+filter(lung, status == 2) %>% with(., median(time)) # Don't do this
+```
+
+---
+# Median Survival
+
+```{r kmsex2, fig.align='center', fig.height=6, fig.width=12, echo=FALSE}
+fit2 <- survfit(Surv(time, status) ~ sex, data=lung)
+names(fit2$strata) <- c("Male", "Female")
+ggsurvplot(fit2, 
+           risk.table = TRUE, 
+           conf.int = TRUE,
+           surv.median.line = "hv",
+           ggtheme = theme_bw(base_size = 16), 
+           legend = "right", 
+           tables.height = 0.3)
+```
+
+- Median survival is 156 days longer in females than in males. 
+  + Note that this is an *associational* description. 
+  
+---
+# Testing for Differences
+
+- The `survdiff` function will compute a non-parametric test for a difference in survival curves. 
+- By default, it computes the log-rank test. The null hypothesis tested is that the survival curves are the same in both (or all) groups.
+  + p-value is probably the only interesting part of the output. 
+  + Usually, we will end up fitting a parametric model to compare groups so that we can account for other variables.
+```{r}
+survdiff(Surv(time, status) ~ ph.ecog, data = lung)
+```
+
+
+---
+# Fitting a Cox Model
+
+- The `coxph` function will fit a Cox proportional hazards regression model. 
+
+```{r}
+coxfit1 <- coxph(Surv(time, status) ~ sex + age +  ph.karno, data = lung)
+summary(coxfit1)
+```
+
+- We estimate that the hazard in females is 0.61 times the hazard in males, adjusting for sex, ECOG score, and Karnofsky score (95% CI: 0.44-0.85). 
+
+---
+# Displaying Survival Curves
+
+- In some cases, it might be useful to display survival curves estimated from the fitted model. 
+
+- Since we have many covariates, we need to choose some covariate values for our curves. 
+  - The median age in the data is 63. 
+  - The 75th percentile of Karnofsky score is 90 (relatively healthy patients).
+  - The 25th percentile of Karnofsky score 70 (less healthy patients).
+  
+- We will plot survival curves for male and female patients of median age and
+  + Have a Karnofsky score of 90 or
+  + Have a Karnofsky score of 70
+  + (So four curves)
+
+---
+# Displaying Survival Curves
+
+.panelset[
+.panel[.panel-name[R Code]
+```{r coxplot, fig.show='hide', fig.align='center', fig.height=7, fig.width=12}
+newdata <- data.frame(sex = rep(c(1, 2), 2), 
+                      age = rep(63, 4), 
+                      ph.karno = rep(c(90, 70), each = 2), 
+                      type = rep(c("Healthy", "Unhealthy"), each = 2)) %>% 
+           mutate(Sex = case_when(sex == 1 ~ "Male", TRUE ~ "Female"),
+                  label = paste0(Sex, " ", type))
+coxfit1_surv <- survfit(coxfit1, newdata = newdata, data = newdata)
+
+ggsurvplot(coxfit1_surv, 
+           palette = c("green3", "green4", "dodgerblue2", "dodgerblue4"),
+           #linetype = c(1, 2, 1, 2),
+           conf.int = FALSE,
+           ggtheme = theme_bw(base_size = 25), 
+           legend.labs = newdata$label,
+           legend = "right")
+
+```
+
+]
+.panel[.panel-name[Plot]
+![](`r knitr::fig_chunk("coxplot", ".png")`)
+]
+]
+
+---
+# Checking Proportional Hazards
+
+- There are two methods (that I know of) for assessing proportion hazards. 
+
+- For a binary or categorical variable, we can create a complimentary log-log plot of the Kaplan-Meier survival estimates. 
+  + Lines should be parallel if hazards are proportional.
+  + Use the `fun = "cloglog"` option in `ggsurvplot`
+  
+- `coxph.zph` will conduct a formal test for proportionality. 
+  + It will also create a diagnostic plot estimating a time-varying coefficient for each variable. 
+  + This can help us diagnose problems. 
+  
+---
+# Checking Proportional Hazards
+
+.panelset[
+.panel[.panel-name[R Code]
+
+```{r}
+zp <- cox.zph(coxfit1)
+zp
+```
+```{r zplot, fig.show='hide', fig.align='center', fig.height=6, fig.width=10}
+plot(zp[3])
+```
+
+]
+.panel[.panel-name[Plot]
+![](`r knitr::fig_chunk("zplot", ".png")`)
+]
+]
+
+---
+# Accounting for Non-Proportional Hazards
+
+- There are three strategies for accommodating non-proportional hazards within Cox regression:
+
+1. Convert a time-fixed covariate into a time-varying covariate. 
+
+2. Stratify the model on a single discrete covariate. 
+
+3. Artificially truncate time after a certain point.
+
+---
+# Stratified Cox Regression
+
+- In a stratified Cox regression, we let subgroups of the data have different baseline hazards. 
+
+- Suppose $V$ is a categorical variable with $K$ levels. We want to fit
+
+$$\lambda(t; X, V, \beta) = \lambda_{0, V}(t)exp(X^\top \beta)$$
+- So we will estimate $K$ different (non-parametric) baseline hazard functions. 
+
+---
+# Stratified Cox Regression 
+
+- Our problematic covariate is Karnofsky score which has 6 levels. 
+
+- To stratify on a covariate we wrap it in `strat()` inside the formula. 
+
+```{r}
+table(lung$ph.karno)
+coxfit2 <- coxph(Surv(time, status) ~ sex + age + 
+                   + strata(ph.karno), data = lung)
+summary(coxfit2)$coefficients
+summary(coxfit1)$coefficients
+```
+
+- Coefficient estimates for age and sex are very similar, we have lost a small amount of precision. 
+
+- We can't easily make inference about the association between survival and Karnofsky score. 
+
+- But we can still plot estimated survival curves. 
+
+---
+# Stratified Cox Regression 
+
+```{r coxplot2, warning = FALSE, message=FALSE, fig.align='center', fig.height=7, fig.width=12, echo = FALSE}
+library(gridExtra)
+newdata <- data.frame(sex = rep(c(1, 2), 2), 
+                      age = rep(63, 4), 
+                      ph.karno = rep(c(90, 70), each = 2), 
+                      type = rep(c("Healthy", "Unhealthy"), each = 2)) %>% 
+           mutate(Sex = case_when(sex == 1 ~ "Male", TRUE ~ "Female"),
+                  label = paste0(Sex, " ", type))
+coxfit2_surv <- survfit(coxfit2, newdata = newdata, data = newdata)
+
+p2 <- ggsurvplot(coxfit2_surv, 
+           palette = c("green3", "green4", "dodgerblue2", "dodgerblue4"),
+           #linetype = c(1, 2, 1, 2),
+           conf.int = FALSE,
+           ggtheme = theme_bw(base_size = 16), 
+           legend.labs = newdata$label,
+           legend = "bottom")
+p1 <- ggsurvplot(coxfit1_surv, 
+           palette = c("green3", "green4", "dodgerblue2", "dodgerblue4"),
+           #linetype = c(1, 2, 1, 2),
+           conf.int = FALSE,
+           ggtheme = theme_bw(base_size = 16), 
+           legend.labs = newdata$label,
+           legend = "bottom")
+grid.arrange(p1$plot + ggtitle("Non-Stratified") + 
+               guides(color = guide_legend(nrow = 2)) + 
+               theme(legend.title = element_blank()) , 
+             p2$plot + ggtitle("Stratified") + 
+               guides(color = guide_legend(nrow = 2)) +
+               theme(legend.title = element_blank()), ncol = 2)
+```
+
+
+---
+# Time-Varying Covariates
+
+
+- The plot produced by `cox.zph` is showing us that we might be better off with a time-varying *coefficient* for Karnofsky score. 
+$$\lambda(t; X, \beta) = \lambda_0(t) \exp(\beta(t)X)$$
+- We can't fit this model directly in the Cox regression framework, but we can achieve an equivalent model by creating one or more time-varying *covariates* based on $X$. 
+
+$$\lambda(t; \tilde{X}, \beta) = \lambda_0(t) \exp(\beta\tilde{X}(t))$$
+
+---
+# Time-Varying Covariates
+
+- Suppose we want a coefficient that is piece-wise constant with a single knot at time $T$:
+
+$$\beta(t) = \beta_0 + \beta_1 I(t > T)\\\
+\beta(t)x = \beta_0 x + \beta_1 I(t > T) x$$
+
+- So we could define a new covariate $\tilde{X}(t) = I(t > T)X$ and then fit our model adjusting for both $X$ and $\tilde{X}(t)$
+
+---
+# Time-Varying Covariates
+
+- We can try to use th plot from `cox.zph` to guess a good transformation. 
+
+- To help us, the `cox.zph` function has an argument `transform`. 
+
+  + `transform` lets us specify a transformation of the x-axis. 
+  + We can look for a transformation that gives a more linear looking estimate of $\beta(t)$
+  
++ In our case, I will try a piecewise constant function with two knots, one at 200, and one at 450 days
+
+```{r zplot2, fig.align='center', fig.height=6, fig.width=10}
+plot(zp[3])
+```
+
+
+---
+# Time-Varying Covariates
+
+- We can't just put time into the formula in the Cox regression. We will get a warning and the wrong answer.
+
+```{r}
+coxfit3 <- coxph(Surv(time, status) ~ sex + age +  
+                   ph.karno + I(ph.karno*time), data = lung)
+```
+
+- The problem is that `time` is doing double duty in this expression. 
+
+- R reads this as an interaction between Karnofsky score and censoring time which isn't what we want. 
+
+
+---
+# Time-Varying Covariates
+
+- Fortunately the `coxph` function has a built in syntax for this: `tt()`.
+
+- Any covariates that we want to make time-varying, we wrap in `tt()`. 
+
+- We then have to specify what `tt` does as an argument to `coxph`. 
+
+- Below we fit a linear term for time 
+```{r}
+coxfit3 <- coxph(Surv(time, status) ~ sex + age +  ph.karno + tt(ph.karno),
+                 tt = function(x, t,...) x*t, data = lung)
+```
+
+- Under the hood, R is creating an expanded data set with one row for each person at each time that anyone in the data was either censored or died. 
+---
+# Time-Varying Covariates
+
+- To fit a piece-wise model with three breaks, we need to add two time-varying covariates. 
+
+- To do this, we let the the function given to `tt` return multiple columns. 
+
+```{r}
+coxfit4 <- coxph(Surv(time, status) ~ sex + age +  ph.karno + tt(ph.karno),
+                 tt = function(x, t,...){
+                   cbind(karno1 = x*(t > 200), karno2 = x*(t > 450))
+                 } , data = lung)
+summary(coxfit4)$coefficients
+```
+
+---
+# Time-Varying Covariates
+
+- We can try plotting our time-varying estimates on top of the plot from `cox.zph` to see if we are doing better. 
+
+```{r zplot3, fig.align='center', fig.height=6, fig.width=10}
+zp <- cox.zph(coxfit1, transform = "identity")
+plot(zp[3])
+b <- function(t){coxfit4$coefficients[3] + 
+                 coxfit4$coefficients[4]*(t > 200) + 
+                 coxfit4$coefficients[5]*(t > 450)}
+curve(b(x), add = TRUE, col = "blue")
+```
+
+---
+# Time-Varying Covariates
+
+- Since Karnofsky score is now represented by three covariates, in order to test the significance we need to test that all three coefficients are equal to zero. 
+
+- One way to do this is to use a likelihood ratio test to compare nested models.
+
+- `anova` will not work the model with `tt()` covariates is using the expanded long format data. 
+
+- We have to compute the LR test statistic by hand. 
+  + Be careful that your models are really nested!
+
+```{r}
+coxfit0 <- coxph(Surv(time, status) ~ sex + age, 
+                 data = lung, subset = which(!is.na(lung$ph.karno)))
+lr0 <- 2*(coxfit4$loglik - coxfit0$loglik)[2]
+c(lr0, pchisq(lr0, df = 3, lower.tail = FALSE))
+```
+
+- This test statistic should have $\chi^2_{3}$ distribution under the null. The 3 came from the number of parameters we put in for Karnofsky score. 
+
+---
+# Time-Varying Covariates
+
+- We could also test how much better the model with the time dependent covariates is than the model without. 
+
+```{r}
+lr1 <- 2*(coxfit4$loglik - coxfit1$loglik)[2]
+c(lr1, pchisq(lr1, df = 2, lower.tail = FALSE))
+```
+
+- Seems like the time-varying model is doing better. 
+
+
+
+```{r xaringan-tile-view, echo=FALSE}
+xaringanExtra::use_tile_view()
+xaringanExtra::use_search(show_icon = TRUE)
+xaringanExtra::use_panelset()
+```
