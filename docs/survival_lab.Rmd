@@ -360,7 +360,7 @@ $$\beta(t) = \beta_0 + \beta_1 I(t > T)\\\
 
 ```{r zplot2, fig.align='center', fig.height=6, fig.width=10}
 zplog <- cox.zph(coxfit1, transform = function(time) log(time + 20))
-plot(zplog[3], xlab = "log(time + 20)")
+plot(zplog[3], xlab = "time, scaled as log(time + 20)")
 abline(h = coxfit1$coefficients[3], col="red", lwd = 2, lty = 2)
 ```
 
@@ -468,6 +468,19 @@ c(lr1, pchisq(lr1, df = 2, lower.tail = FALSE))
 
 - Seems like the time-varying model is fitting better.
 
+
+---
+# Time-Varying Covariates
+
+
+- Retrieving fitted survival curves is a little trickier. 
+
+- `survfit` won't work on fits that include `tt()` terms. 
+
+- Instead, we have to refit the model creating the expanded data set ourselves and then 
+estimate the survival curves. 
+
+  + The linked time-dependent pdf and the <a hreft="https://cran.r-project.org/web/packages/survival/vignettes/survival.pdf">survival package documentation</a> both show how to do this. 
 
 ```{r xaringan-tile-view, echo=FALSE}
 xaringanExtra::use_tile_view()
